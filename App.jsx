@@ -138,6 +138,81 @@ async function supabaseDeleteTaskUpdate(accessToken, id) {
   }
 }
 
+// ---------- Operations ----------
+function mapOperationRow(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    client: row.client || "",
+    description: row.description || "",
+    stages: row.stages && Object.keys(row.stages).length ? row.stages : emptyStages(),
+    costItems: row.cost_items || [],
+    revenueItems: row.revenue_items || [],
+    documents: row.documents || [],
+    closed: !!row.closed,
+  };
+}
+
+async function supabaseFetchOperations(accessToken) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/operations?select=*&order=created_at.desc`, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || "Could not load operations.");
+  return data.map(mapOperationRow);
+}
+
+async function supabaseCreateOperation(accessToken, opData) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/operations`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Prefer: "return=representation" },
+    body: JSON.stringify({
+      title: opData.title,
+      client: opData.client,
+      description: opData.description,
+      stages: opData.stages,
+      cost_items: opData.costItems,
+      revenue_items: opData.revenueItems,
+      documents: opData.documents,
+      closed: opData.closed || false,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || "Could not create the operation.");
+  return mapOperationRow(data[0]);
+}
+
+async function supabaseUpdateOperation(accessToken, id, opData) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/operations?id=eq.${id}`, {
+    method: "PATCH",
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Prefer: "return=representation" },
+    body: JSON.stringify({
+      title: opData.title,
+      client: opData.client,
+      description: opData.description,
+      stages: opData.stages,
+      cost_items: opData.costItems,
+      revenue_items: opData.revenueItems,
+      documents: opData.documents,
+      closed: opData.closed,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || "Could not save the operation.");
+  return mapOperationRow(data[0]);
+}
+
+async function supabaseDeleteOperation(accessToken, id) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/operations?id=eq.${id}`, {
+    method: "DELETE",
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message || "Could not delete the operation.");
+  }
+}
+
 // ---- Design tokens (Alliance Shipping & Logistics) ----
 const C = {
   navyDeep: "#0B1F3A",
@@ -251,9 +326,6 @@ function toUSD(amount, currency, rates) {
   return amount / rate;
 }
 
-// ---- Demo data ----
-const initialTasks = [];
-
 const initialQuotes = [
   {
     id: 1,
@@ -268,33 +340,10 @@ const initialQuotes = [
   },
 ];
 
-const initialMembers = [
-  { id: 1, name: "Deniz Aksoy", username: "deniz.aksoy", role: "Operations" },
-  { id: 2, name: "Elif Kaya", username: "elif.kaya", role: "Customs & Documentation" },
-  { id: 3, name: "Can Yildiz", username: "can.yildiz", role: "Sales" },
-];
-
 function nextQuoteNumber(quotes) {
   const n = quotes.length + 1;
   return `Q-${String(n).padStart(4, "0")}`;
 }
-
-const initialOperations = [
-  {
-    id: 1,
-    title: "Izmir → Rotterdam Container Shipment",
-    client: "Ege Textile Exports",
-    description: "20ft container, textile goods. Client requested priority handling at customs.",
-    stages: { bookingConfirmed: true, loaded: true, vesselDeparted: true, inTransit: false, arrived: false },
-    costItems: [
-      { id: 1001, description: "Freight", amount: 3200, currency: "USD" },
-      { id: 1002, description: "Customs Clearance", amount: 8500, currency: "TRY" },
-    ],
-    revenueItems: [{ id: 2001, description: "Client Invoice", amount: 4500, currency: "USD" }],
-    documents: [{ id: 3001, type: "Invoice", name: "invoice-2291.pdf" }],
-    closed: false,
-  },
-];
 
 function Wordmark({ size = "md" }) {
   const big = size === "lg";
@@ -1013,6 +1062,8 @@ function OperationModal({ op, onClose, onSave, onDelete, onCloseOperation, rates
   const [costItems, setCostItems] = useState(op?.costItems || []);
   const [revenueItems, setRevenueItems] = useState(op?.revenueItems || []);
   const [documents, setDocuments] = useState(op?.documents || []);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   function buildData() {
     return {
@@ -1028,20 +1079,46 @@ function OperationModal({ op, onClose, onSave, onDelete, onCloseOperation, rates
     };
   }
 
-  function save() {
+  async function save() {
     if (!title.trim()) return;
-    onSave(buildData());
-    onClose();
+    setError("");
+    setSaving(true);
+    try {
+      await onSave(buildData());
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function closeOperation() {
+  async function closeOperation() {
     if (!title.trim()) return;
-    onCloseOperation(buildData());
-    onClose();
+    setError("");
+    setSaving(true);
+    try {
+      await onCloseOperation(buildData());
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    setError("");
+    try {
+      await onDelete(op.id);
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   return (
-    <ModalShell onClose={onClose} title={isNew ? "New Operation" : "Operation Details"} onDelete={!isNew ? () => { onDelete(op.id); onClose(); } : null}>
+    <ModalShell onClose={onClose} title={isNew ? "New Operation" : "Operation Details"} onDelete={!isNew ? handleDelete : null}>
       <label style={labelStyle}>Operation Title</label>
       <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Izmir → Rotterdam Container Shipment" style={lightInputStyle} autoFocus />
 
@@ -1064,7 +1141,11 @@ function OperationModal({ op, onClose, onSave, onDelete, onCloseOperation, rates
       <FinancialSummary costItems={costItems} revenueItems={revenueItems} rates={rates} status={ratesStatus} />
       <DocumentsEditor documents={documents} setDocuments={setDocuments} />
 
-      <button onClick={save} style={primaryButton}>{isNew ? "Create Operation" : "Save Changes"}</button>
+      {error && <div style={{ color: C.red, fontSize: 13.5, marginTop: 14 }}>{error}</div>}
+
+      <button onClick={save} disabled={saving} style={{ ...primaryButton, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+        {saving ? "Saving..." : isNew ? "Create Operation" : "Save Changes"}
+      </button>
 
       {!isNew && (
         op.closed ? (
@@ -1074,7 +1155,7 @@ function OperationModal({ op, onClose, onSave, onDelete, onCloseOperation, rates
         ) : (
           <button
             onClick={closeOperation}
-            disabled={ratesStatus !== "ready"}
+            disabled={ratesStatus !== "ready" || saving}
             style={{
               width: "100%",
               marginTop: 12,
@@ -1085,8 +1166,8 @@ function OperationModal({ op, onClose, onSave, onDelete, onCloseOperation, rates
               fontSize: 15,
               border: `1.5px solid ${C.navyDeep}`,
               borderRadius: 5,
-              cursor: ratesStatus === "ready" ? "pointer" : "default",
-              opacity: ratesStatus === "ready" ? 1 : 0.5,
+              cursor: ratesStatus === "ready" && !saving ? "pointer" : "default",
+              opacity: ratesStatus === "ready" && !saving ? 1 : 0.5,
             }}
           >
             {ratesStatus === "ready" ? "Close Operation → Send to Finance" : "Waiting for exchange rates..."}
@@ -1400,23 +1481,63 @@ function TasksPanel({ currentUser, accessToken }) {
   );
 }
 
-function OperationsPanel({ operations, setOperations, onCloseOperation, rates, ratesStatus }) {
+function OperationsPanel({ accessToken, onCloseOperation, rates, ratesStatus }) {
+  const [operations, setOperations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [modalOp, setModalOp] = useState(undefined);
 
-  function saveOp(opData) {
-    setOperations((prev) => (prev.some((o) => o.id === opData.id) ? prev.map((o) => (o.id === opData.id ? opData : o)) : [opData, ...prev]));
+  useEffect(() => {
+    let cancelled = false;
+    supabaseFetchOperations(accessToken)
+      .then((data) => {
+        if (!cancelled) setOperations(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
+
+  async function saveOp(opData) {
+    const exists = operations.some((o) => o.id === opData.id);
+    if (exists) {
+      const updated = await supabaseUpdateOperation(accessToken, opData.id, opData);
+      setOperations((prev) => prev.map((o) => (o.id === updated.id ? updated : o)));
+    } else {
+      const created = await supabaseCreateOperation(accessToken, opData);
+      setOperations((prev) => [created, ...prev]);
+    }
   }
-  function deleteOp(id) {
+
+  async function deleteOp(id) {
+    await supabaseDeleteOperation(accessToken, id);
     setOperations((prev) => prev.filter((o) => o.id !== id));
   }
-  function closeOp(opData) {
-    onCloseOperation(opData);
+
+  async function closeOp(opData) {
+    const exists = operations.some((o) => o.id === opData.id);
+    const closedData = { ...opData, closed: true };
+    const saved = exists
+      ? await supabaseUpdateOperation(accessToken, opData.id, closedData)
+      : await supabaseCreateOperation(accessToken, closedData);
+    setOperations((prev) => (exists ? prev.map((o) => (o.id === saved.id ? saved : o)) : [saved, ...prev]));
+    await onCloseOperation(saved);
   }
 
   return (
     <>
       <PanelHeader title="Operations" buttonLabel="New Operation" onAdd={() => setModalOp(null)} />
-      {operations.length === 0 ? (
+      {loading ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: C.slateLight, fontSize: 16 }}>Loading operations...</div>
+      ) : loadError ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: C.red, fontSize: 16 }}>{loadError}</div>
+      ) : operations.length === 0 ? (
         <EmptyState text="No operations yet." />
       ) : (
         operations.map((op) => <OperationCard key={op.id} op={op} onOpen={setModalOp} onDelete={deleteOp} />)
@@ -1446,8 +1567,8 @@ function QuotesPanel({ onConvertToOperation, rates, ratesStatus }) {
   function deleteQuote(id) {
     setQuotes((prev) => prev.filter((q) => q.id !== id));
   }
-  function convertQuote(quoteData) {
-    const operationId = onConvertToOperation(quoteData);
+  async function convertQuote(quoteData) {
+    const operationId = await onConvertToOperation(quoteData);
     const updated = { ...quoteData, convertedOperationId: operationId };
     saveQuote(updated);
   }
@@ -2019,13 +2140,11 @@ function EmptyState({ text }) {
 function Dashboard({ session, onLogout }) {
   const displayName = session.profile?.full_name || session.authUser.email.split("@")[0];
   const [activeTab, setActiveTab] = useState("tasks");
-  const [operations, setOperations] = useState(initialOperations);
   const [financeActivities, setFinanceActivities] = useState([]);
   const { rates, status: ratesStatus } = useExchangeRates();
 
-  function convertQuoteToOperation(quoteData) {
-    const newOperation = {
-      id: Date.now(),
+  async function convertQuoteToOperation(quoteData) {
+    const created = await supabaseCreateOperation(session.accessToken, {
       title: quoteData.title,
       client: quoteData.client,
       description: quoteData.description,
@@ -2034,12 +2153,11 @@ function Dashboard({ session, onLogout }) {
       revenueItems: quoteData.revenueItems,
       documents: [],
       closed: false,
-    };
-    setOperations((prev) => [newOperation, ...prev]);
-    return newOperation.id;
+    });
+    return created.id;
   }
 
-  function closeOperationToFinance(opData) {
+  async function closeOperationToFinance(opData) {
     const newActivities = [];
     opData.costItems.forEach((item) => {
       newActivities.push({
@@ -2073,9 +2191,6 @@ function Dashboard({ session, onLogout }) {
     });
 
     setFinanceActivities((prev) => [...newActivities, ...prev]);
-
-    const closedOp = { ...opData, closed: true };
-    setOperations((prev) => (prev.some((o) => o.id === closedOp.id) ? prev.map((o) => (o.id === closedOp.id ? closedOp : o)) : [closedOp, ...prev]));
   }
 
   return (
@@ -2127,8 +2242,7 @@ function Dashboard({ session, onLogout }) {
         {activeTab === "tasks" && <TasksPanel currentUser={displayName} accessToken={session.accessToken} />}
         {activeTab === "operations" && (
           <OperationsPanel
-            operations={operations}
-            setOperations={setOperations}
+            accessToken={session.accessToken}
             onCloseOperation={closeOperationToFinance}
             rates={rates}
             ratesStatus={ratesStatus}
