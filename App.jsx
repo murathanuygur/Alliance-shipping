@@ -18,7 +18,7 @@ async function supabaseSignIn(username, password) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error_description || data.msg || "Incorrect username or password.");
-  return data; // { access_token, refresh_token, user }
+  return data;
 }
 
 async function supabaseSignUp(username, password) {
@@ -61,6 +61,80 @@ async function supabaseDeleteProfile(accessToken, id) {
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.message || "Could not remove this member.");
+  }
+}
+
+// ---------- Active Tasks ----------
+async function supabaseFetchTasks(accessToken) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/tasks?select=*,task_updates(*)&order=created_at.desc`, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || "Could not load tasks.");
+  return data.map((t) => ({
+    id: t.id,
+    title: t.title,
+    status: t.status,
+    updates: (t.task_updates || [])
+      .slice()
+      .sort((a, b) => (a.date === b.date ? (a.created_at < b.created_at ? 1 : -1) : a.date < b.date ? 1 : -1))
+      .map((u) => ({ id: u.id, author: u.author, date: u.date, text: u.text })),
+  }));
+}
+
+async function supabaseCreateTask(accessToken, title, status) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/tasks`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Prefer: "return=representation" },
+    body: JSON.stringify({ title, status }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || "Could not create the task.");
+  return { id: data[0].id, title: data[0].title, status: data[0].status, updates: [] };
+}
+
+async function supabaseUpdateTaskFields(accessToken, id, title, status) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/tasks?id=eq.${id}`, {
+    method: "PATCH",
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ title, status }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message || "Could not save the task.");
+  }
+}
+
+async function supabaseDeleteTaskRow(accessToken, id) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/tasks?id=eq.${id}`, {
+    method: "DELETE",
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message || "Could not delete the task.");
+  }
+}
+
+async function supabaseAddTaskUpdate(accessToken, taskId, author, date, text) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/task_updates`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Prefer: "return=representation" },
+    body: JSON.stringify({ task_id: taskId, author, date, text }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || "Could not add the update.");
+  return { id: data[0].id, author: data[0].author, date: data[0].date, text: data[0].text };
+}
+
+async function supabaseDeleteTaskUpdate(accessToken, id) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/task_updates?id=eq.${id}`, {
+    method: "DELETE",
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message || "Could not delete the update.");
   }
 }
 
@@ -144,7 +218,7 @@ function sumByCurrency(items) {
 
 function useExchangeRates() {
   const [rates, setRates] = useState(null);
-  const [status, setStatus] = useState("loading"); // loading | ready | error
+  const [status, setStatus] = useState("loading");
 
   useEffect(() => {
     let cancelled = false;
@@ -172,39 +246,13 @@ function useExchangeRates() {
 
 function toUSD(amount, currency, rates) {
   if (currency === "USD") return amount;
-  const rate = rates?.[currency]; // units of `currency` per 1 USD
+  const rate = rates?.[currency];
   if (!rate) return null;
   return amount / rate;
 }
 
 // ---- Demo data ----
-const initialTasks = [
-  {
-    id: 1,
-    title: "Container #TRK-2291 — Izmir Port Customs Clearance",
-    status: "in_progress",
-    updates: [
-      { id: 101, author: "Elif Kaya", date: todayISO(), text: "Customs documents submitted, awaiting approval." },
-      { id: 102, author: "Deniz Aksoy", date: todayISO(), text: "Container arrived at port." },
-    ],
-  },
-  {
-    id: 2,
-    title: "New Client Quote — Ege Textile Exports",
-    status: "not_started",
-    updates: [
-      { id: 201, author: "Can Yildiz", date: todayISO(), text: "Gathering pricing info before preparing the quote." },
-    ],
-  },
-  {
-    id: 3,
-    title: "Fleet Vehicle Maintenance — 34 ABC 123",
-    status: "completed",
-    updates: [
-      { id: 301, author: "Burak Sahin", date: todayISO(), text: "Maintenance completed, vehicle back on the road." },
-    ],
-  },
-];
+const initialTasks = [];
 
 const initialQuotes = [
   {
@@ -398,8 +446,6 @@ function LoginScreen({ onLogin }) {
 
         <div style={{ marginTop: 18, fontSize: 13, color: C.slateLight, textAlign: "center", lineHeight: 1.5 }}>
           Connected to your real Alliance account system.
-          <br />
-          In this preview, "Remember me" won't persist across a page refresh — that will work normally once the site is live on its own domain.
         </div>
       </form>
     </div>
@@ -467,8 +513,6 @@ function IconButton({ onClick, children, title, danger }) {
   );
 }
 
-/* ===================== ACTIVE TASKS ===================== */
-
 function TaskCard({ task, onOpen, onDelete }) {
   const lastUpdate = task.updates[0];
   return (
@@ -505,33 +549,69 @@ function TaskCard({ task, onOpen, onDelete }) {
   );
 }
 
-function TaskModal({ task, onClose, onSave, onDelete, currentUser }) {
-  const isNew = !task;
-  const [title, setTitle] = useState(task?.title || "");
-  const [status, setStatus] = useState(task?.status || "not_started");
-  const [updates, setUpdates] = useState(task?.updates || []);
+function TaskModal({ task, onClose, currentUser, onCreateTask, onSaveFields, onDeleteTask, onAddUpdate, onDeleteUpdate }) {
+  const [activeTask, setActiveTask] = useState(task);
+  const isNew = !activeTask;
+  const [title, setTitle] = useState(activeTask?.title || "");
+  const [status, setStatus] = useState(activeTask?.status || "not_started");
   const [newDate, setNewDate] = useState(todayISO());
   const [newText, setNewText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
-  function addUpdate() {
-    if (!newText.trim()) return;
-    setUpdates([{ id: Date.now(), author: currentUser, date: newDate, text: newText.trim() }, ...updates]);
-    setNewText("");
-    setNewDate(todayISO());
-  }
-
-  function removeUpdate(id) {
-    setUpdates(updates.filter((u) => u.id !== id));
-  }
-
-  function save() {
+  async function save() {
     if (!title.trim()) return;
-    onSave({ id: task?.id || Date.now(), title: title.trim(), status, updates });
-    onClose();
+    setError("");
+    setSaving(true);
+    try {
+      if (isNew) {
+        const created = await onCreateTask(title.trim(), status);
+        setActiveTask(created);
+      } else {
+        await onSaveFields(activeTask.id, title.trim(), status);
+        onClose();
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addUpdate() {
+    if (!newText.trim() || !activeTask) return;
+    setError("");
+    try {
+      const created = await onAddUpdate(activeTask.id, newDate, newText.trim());
+      setActiveTask((prev) => ({ ...prev, updates: [created, ...prev.updates] }));
+      setNewText("");
+      setNewDate(todayISO());
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function removeUpdate(id) {
+    setError("");
+    try {
+      await onDeleteUpdate(id);
+      setActiveTask((prev) => ({ ...prev, updates: prev.updates.filter((u) => u.id !== id) }));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleDeleteTask() {
+    try {
+      await onDeleteTask(activeTask.id);
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   return (
-    <ModalShell onClose={onClose} title={isNew ? "New Active Task" : "Task Details"} onDelete={!isNew ? () => { onDelete(task.id); onClose(); } : null}>
+    <ModalShell onClose={onClose} title={isNew ? "New Active Task" : "Task Details"} onDelete={!isNew ? handleDeleteTask : null}>
       <label style={labelStyle}>Title</label>
       <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Antalya Port Cargo Delivery" style={lightInputStyle} autoFocus />
 
@@ -542,40 +622,50 @@ function TaskModal({ task, onClose, onSave, onDelete, currentUser }) {
         ))}
       </div>
 
-      <label style={{ ...labelStyle, marginTop: 24 }}>Updates</label>
-      <div style={{ marginTop: 8, marginBottom: 16 }}>
-        {updates.length === 0 && <div style={{ fontSize: 14, color: C.slateLight, padding: "8px 0" }}>No updates yet.</div>}
-        {updates.map((u) => (
-          <div key={u.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, padding: "12px 0", borderBottom: `1px solid ${C.border}` }}>
-            <div>
-              <div style={{ fontSize: 13.5, color: C.slateLight, marginBottom: 4 }}>
-                <span style={{ fontWeight: 700, color: C.navyInk }}>{u.author}</span> · {formatDate(u.date)}
-              </div>
-              <div style={{ fontSize: 15, color: "#333", lineHeight: 1.5 }}>{u.text}</div>
-            </div>
-            <IconButton title="Delete update" danger onClick={() => removeUpdate(u.id)}>
-              <Trash2 size={17} />
-            </IconButton>
-          </div>
-        ))}
-      </div>
+      {error && <div style={{ color: C.red, fontSize: 13.5, marginTop: 14 }}>{error}</div>}
 
-      <div style={{ background: "#FFFFFF", border: `1px solid ${C.border}`, borderRadius: 6, padding: 14 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 700, color: C.slate, marginBottom: 10 }}>Add an update</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-          <Calendar size={16} color={C.slateLight} />
-          <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} style={{ ...lightInputStyle, width: "auto", padding: "8px 10px", fontSize: 14 }} />
+      <button onClick={save} disabled={saving} style={{ ...primaryButton, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+        {saving ? "Saving..." : isNew ? "Create Task" : "Save Changes"}
+      </button>
+
+      {isNew ? (
+        <div style={{ fontSize: 13, color: C.slateLight, marginTop: 16, textAlign: "center" }}>
+          Create the task first — you'll be able to add updates right after.
         </div>
-        <textarea value={newText} onChange={(e) => setNewText(e.target.value)} placeholder={`Write an update as ${currentUser}...`} rows={3} style={{ ...lightInputStyle, resize: "vertical", fontSize: 15 }} />
-        <button onClick={addUpdate} style={smallDarkButton}>Add Update</button>
-      </div>
+      ) : (
+        <>
+          <label style={{ ...labelStyle, marginTop: 28 }}>Updates</label>
+          <div style={{ marginTop: 8, marginBottom: 16 }}>
+            {activeTask.updates.length === 0 && <div style={{ fontSize: 14, color: C.slateLight, padding: "8px 0" }}>No updates yet.</div>}
+            {activeTask.updates.map((u) => (
+              <div key={u.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, padding: "12px 0", borderBottom: `1px solid ${C.border}` }}>
+                <div>
+                  <div style={{ fontSize: 13.5, color: C.slateLight, marginBottom: 4 }}>
+                    <span style={{ fontWeight: 700, color: C.navyInk }}>{u.author}</span> · {formatDate(u.date)}
+                  </div>
+                  <div style={{ fontSize: 15, color: "#333", lineHeight: 1.5 }}>{u.text}</div>
+                </div>
+                <IconButton title="Delete update" danger onClick={() => removeUpdate(u.id)}>
+                  <Trash2 size={17} />
+                </IconButton>
+              </div>
+            ))}
+          </div>
 
-      <button onClick={save} style={primaryButton}>{isNew ? "Create Task" : "Save Changes"}</button>
+          <div style={{ background: "#FFFFFF", border: `1px solid ${C.border}`, borderRadius: 6, padding: 14 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.slate, marginBottom: 10 }}>Add an update</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <Calendar size={16} color={C.slateLight} />
+              <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} style={{ ...lightInputStyle, width: "auto", padding: "8px 10px", fontSize: 14 }} />
+            </div>
+            <textarea value={newText} onChange={(e) => setNewText(e.target.value)} placeholder={`Write an update as ${currentUser}...`} rows={3} style={{ ...lightInputStyle, resize: "vertical", fontSize: 15 }} />
+            <button onClick={addUpdate} style={smallDarkButton}>Add Update</button>
+          </div>
+        </>
+      )}
     </ModalShell>
   );
 }
-
-/* ===================== OPERATIONS ===================== */
 
 function currencyChipsRow(items) {
   const totals = sumByCurrency(items);
@@ -812,7 +902,6 @@ function FinancialSummary({ costItems, revenueItems, rates, status }) {
 
   if (currencies.length === 0) return null;
 
-  // Combined totals converted to USD using live rates
   let usdCost = 0;
   let usdRevenue = 0;
   let conversionIncomplete = false;
@@ -1007,8 +1096,6 @@ function OperationModal({ op, onClose, onSave, onDelete, onCloseOperation, rates
     </ModalShell>
   );
 }
-
-/* ===================== QUOTES ===================== */
 
 function QuoteCard({ quote, onOpen, onDelete }) {
   const costTotals = sumByCurrency(quote.costItems);
@@ -1223,8 +1310,6 @@ const primaryButton = {
   cursor: "pointer",
 };
 
-/* ===================== DASHBOARD / NAV ===================== */
-
 const NAV_ITEMS = [
   { key: "tasks", label: "Active Tasks", ready: true },
   { key: "operations", label: "Operations", ready: true },
@@ -1233,16 +1318,55 @@ const NAV_ITEMS = [
   { key: "members", label: "Members", ready: true },
 ];
 
-function TasksPanel({ currentUser }) {
-  const [tasks, setTasks] = useState(initialTasks);
+function TasksPanel({ currentUser, accessToken }) {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [filter, setFilter] = useState("all");
   const [modalTask, setModalTask] = useState(undefined);
 
-  function saveTask(taskData) {
-    setTasks((prev) => (prev.some((t) => t.id === taskData.id) ? prev.map((t) => (t.id === taskData.id ? taskData : t)) : [taskData, ...prev]));
+  useEffect(() => {
+    let cancelled = false;
+    supabaseFetchTasks(accessToken)
+      .then((data) => {
+        if (!cancelled) setTasks(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
+
+  async function createTask(title, status) {
+    const created = await supabaseCreateTask(accessToken, title, status);
+    setTasks((prev) => [created, ...prev]);
+    return created;
   }
-  function deleteTask(id) {
+
+  async function saveFields(id, title, status) {
+    await supabaseUpdateTaskFields(accessToken, id, title, status);
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, title, status } : t)));
+  }
+
+  async function deleteTask(id) {
+    await supabaseDeleteTaskRow(accessToken, id);
     setTasks((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  async function addUpdate(taskId, date, text) {
+    const created = await supabaseAddTaskUpdate(accessToken, taskId, currentUser, date, text);
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, updates: [created, ...t.updates] } : t)));
+    return created;
+  }
+
+  async function deleteUpdate(updateId) {
+    await supabaseDeleteTaskUpdate(accessToken, updateId);
+    setTasks((prev) => prev.map((t) => ({ ...t, updates: t.updates.filter((u) => u.id !== updateId) })));
   }
 
   const visibleTasks = filter === "all" ? tasks : tasks.filter((t) => t.status === filter);
@@ -1251,13 +1375,26 @@ function TasksPanel({ currentUser }) {
     <>
       <PanelHeader title="Active Tasks" buttonLabel="New Active Task" onAdd={() => setModalTask(null)} />
       <FilterRow filter={filter} setFilter={setFilter} />
-      {visibleTasks.length === 0 ? (
+      {loading ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: C.slateLight, fontSize: 16 }}>Loading tasks...</div>
+      ) : loadError ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: C.red, fontSize: 16 }}>{loadError}</div>
+      ) : visibleTasks.length === 0 ? (
         <EmptyState text="No tasks in this status." />
       ) : (
         visibleTasks.map((task) => <TaskCard key={task.id} task={task} onOpen={setModalTask} onDelete={deleteTask} />)
       )}
       {modalTask !== undefined && (
-        <TaskModal task={modalTask} onClose={() => setModalTask(undefined)} onSave={saveTask} onDelete={deleteTask} currentUser={currentUser} />
+        <TaskModal
+          task={modalTask}
+          onClose={() => setModalTask(undefined)}
+          currentUser={currentUser}
+          onCreateTask={createTask}
+          onSaveFields={saveFields}
+          onDeleteTask={deleteTask}
+          onAddUpdate={addUpdate}
+          onDeleteUpdate={deleteUpdate}
+        />
       )}
     </>
   );
@@ -1481,13 +1618,11 @@ function FinancePanel({ activities, setActivities, rates, ratesStatus }) {
     setActivities((prev) => prev.filter((a) => a.id !== id));
   }
 
-  // ---- Overview: all-time totals from locked USD amounts (stable, never recalculated) ----
   const totalIncome = activities.filter((a) => a.type === "income").reduce((sum, a) => sum + (a.usdAmount || 0), 0);
   const totalExpense = activities.filter((a) => a.type === "expense").reduce((sum, a) => sum + (a.usdAmount || 0), 0);
   const netProfit = totalIncome - totalExpense;
   const margin = totalIncome > 0 ? (netProfit / totalIncome) * 100 : null;
 
-  // ---- Profit by client (only entries with a client tag) ----
   const clientMap = {};
   activities.forEach((a) => {
     if (!a.client) return;
@@ -1499,11 +1634,9 @@ function FinancePanel({ activities, setActivities, rates, ratesStatus }) {
     .map(([client, d]) => ({ client, ...d, net: d.income - d.expense }))
     .sort((a, b) => b.net - a.net);
 
-  // ---- Filter option lists ----
   const clientOptions = Array.from(new Set(activities.map((a) => a.client).filter(Boolean)));
   const categoryOptions = Array.from(new Set(activities.map((a) => a.category).filter(Boolean)));
 
-  // ---- Filtered report ----
   const filtered = activities.filter((a) => {
     if (fDateFrom && a.date < fDateFrom) return false;
     if (fDateTo && a.date > fDateTo) return false;
@@ -1683,8 +1816,6 @@ function FinancePanel({ activities, setActivities, rates, ratesStatus }) {
   );
 }
 
-/* ===================== MEMBERS ===================== */
-
 function MemberModal({ onClose, onSaved }) {
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
@@ -1808,7 +1939,7 @@ function MembersPanel({ accessToken, currentUserId }) {
     try {
       await supabaseDeleteProfile(accessToken, id);
     } catch (err) {
-      setMembers(prev); // roll back on failure
+      setMembers(prev);
       setLoadError(err.message);
     }
   }
@@ -1993,7 +2124,7 @@ function Dashboard({ session, onLogout }) {
       </div>
 
       <div style={{ maxWidth: 1000, margin: "0 auto", padding: "36px 24px 60px" }}>
-        {activeTab === "tasks" && <TasksPanel currentUser={displayName} />}
+        {activeTab === "tasks" && <TasksPanel currentUser={displayName} accessToken={session.accessToken} />}
         {activeTab === "operations" && (
           <OperationsPanel
             operations={operations}
@@ -2022,7 +2153,6 @@ export default function App() {
       const profiles = await supabaseFetchProfiles(authData.access_token);
       profile = profiles.find((p) => p.id === authData.user.id) || null;
     } catch (e) {
-      // If the profile lookup fails, we still let the user in — display name just falls back to their email.
     }
     setSession({ accessToken: authData.access_token, refreshToken: authData.refresh_token, authUser: authData.user, profile });
   }
